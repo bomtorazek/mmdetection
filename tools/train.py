@@ -11,6 +11,9 @@ from mmcv import Config, DictAction
 from mmcv.runner import init_dist
 from mmcv.utils import get_git_hash
 
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 from mmdet import __version__
 from mmdet.apis import set_random_seed, train_detector
 from mmdet.datasets import build_dataset
@@ -64,6 +67,7 @@ def parse_args():
         default='none',
         help='job launcher')
     parser.add_argument('--local_rank', type=int, default=0)
+    parser.add_argument('--fold', type=int, default=1)
     args = parser.parse_args()
     if 'LOCAL_RANK' not in os.environ:
         os.environ['LOCAL_RANK'] = str(args.local_rank)
@@ -81,7 +85,6 @@ def parse_args():
 
 def main():
     args = parse_args()
-
     cfg = Config.fromfile(args.config)
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
@@ -150,12 +153,16 @@ def main():
 
     model = build_detector(
         cfg.model, train_cfg=cfg.train_cfg, test_cfg=cfg.test_cfg)
-
-    datasets = [build_dataset(cfg.data.train)]
+    
+    data_train = cfg.data.train
+    data_train['ann_file'] = data_train['ann_file'] + f'_{args.fold}.json'
+    datasets = [build_dataset(data_train)]
     if len(cfg.workflow) == 2:
         val_dataset = copy.deepcopy(cfg.data.val)
-        val_dataset.pipeline = cfg.data.train.pipeline
+        val_dataset['ann_file'] = val_dataset['ann_file'] + f'_{args.fold}.json'
+        val_dataset.pipeline = data_train.pipeline
         datasets.append(build_dataset(val_dataset))
+        
     if cfg.checkpoint_config is not None:
         # save mmdet version, config file content and class names in
         # checkpoints as meta data
@@ -164,10 +171,12 @@ def main():
             CLASSES=datasets[0].CLASSES)
     # add an attribute for visualization convenience
     model.CLASSES = datasets[0].CLASSES
+    cfg_new= copy.deepcopy(cfg)
+    cfg_new.data.val['ann_file'] += f'_{args.fold}.json'
     train_detector(
         model,
         datasets,
-        cfg,
+        cfg_new,
         distributed=distributed,
         validate=(not args.no_validate),
         timestamp=timestamp,

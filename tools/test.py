@@ -9,7 +9,10 @@ from mmcv.cnn import fuse_conv_bn
 from mmcv.parallel import MMDataParallel, MMDistributedDataParallel
 from mmcv.runner import (get_dist_info, init_dist, load_checkpoint,
                          wrap_fp16_model)
-
+import sys
+import os
+import pandas as pd
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 from mmdet.apis import multi_gpu_test, single_gpu_test
 from mmdet.datasets import (build_dataloader, build_dataset,
                             replace_ImageToTensor)
@@ -32,7 +35,7 @@ def parse_args():
         action='store_true',
         help='Format the output results without perform evaluation. It is'
         'useful when you want to format the result to a specific format and '
-        'submit it to the test server')
+        'submit it to the test server') 
     parser.add_argument(
         '--eval',
         type=str,
@@ -91,6 +94,7 @@ def parse_args():
     if args.options:
         warnings.warn('--options is deprecated in favor of --eval-options')
         args.eval_options = args.options
+    
     return args
 
 
@@ -155,7 +159,7 @@ def main():
         samples_per_gpu=samples_per_gpu,
         workers_per_gpu=cfg.data.workers_per_gpu,
         dist=distributed,
-        shuffle=False)
+        shuffle=False)  
 
     # build the model and load checkpoint
     model = build_detector(cfg.model, train_cfg=None, test_cfg=cfg.test_cfg)
@@ -174,8 +178,13 @@ def main():
 
     if not distributed:
         model = MMDataParallel(model, device_ids=[0])
-        outputs = single_gpu_test(model, data_loader, args.show, args.show_dir,
-                                  args.show_score_thr)
+        if args.out:
+            outputs,poly_results, filenames = single_gpu_test(model, data_loader, args.show, args.show_dir,
+                                      args.show_score_thr, args.out) #FIXME
+        else:
+            outputs =single_gpu_test(model, data_loader, args.show, args.show_dir,
+                                      args.show_score_thr, args.out) 
+        
     else:
         model = MMDistributedDataParallel(
             model.cuda(),
@@ -188,7 +197,29 @@ def main():
     if rank == 0:
         if args.out:
             print(f'\nwriting results to {args.out}')
-            mmcv.dump(outputs, args.out)
+            
+#             mmcv.dump(outputs, args.out)
+            df = pd.DataFrame(columns = ['File', 'Class', 'Confidence', 'X1','Y1','X2','Y2','X3','Y3','X4','Y4'])
+            for i in range(len(filenames)):
+                for poly in poly_results[i]:
+
+                    df = df.append({
+                        "File": filenames[i],
+                        "Class": poly[0],
+                        "Confidence": poly[1],
+                        "X1": poly[2][0][0],
+                        "Y1": poly[2][0][1],
+                        "X2": poly[2][1][0],
+                        "Y2": poly[2][1][1],
+                        "X3": poly[2][2][0],
+                        "Y3": poly[2][2][1],
+                        "X4": poly[2][3][0],
+                        "Y4": poly[2][3][1]
+                        }, ignore_index=True)
+
+            df.to_csv('./for_submit/prediction.csv', index=False) 
+            
+
         kwargs = {} if args.eval_options is None else args.eval_options
         if args.format_only:
             dataset.format_results(outputs, **kwargs)
