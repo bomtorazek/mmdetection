@@ -8,8 +8,11 @@ import csv
 from numpy import (array, dot, arccos, clip)
 from numpy.linalg import norm
 
+import numpy as np
+from scipy.spatial import ConvexHull
+
 from imantics import Polygons, Mask
-from PIL import Image
+from PIL import Image, ImageDraw 
 
 import mmcv
 import torch
@@ -19,7 +22,77 @@ from mmcv.runner import get_dist_info
 
 from mmdet.core import encode_mask_results
 
-BINARY = True
+BINARY = False
+
+def minimum_bounding_rectangle(points):
+    """
+    Find the smallest bounding rectangle for a set of points.
+    Returns a set of points representing the corners of the bounding box.
+
+    :param points: an nx2 matrix of coordinates
+    :rval: an nx2 matrix of coordinates
+    """
+    from scipy.ndimage.interpolation import rotate
+    pi2 = np.pi/2.
+
+    # get the convex hull for the points
+    hull_points = points[ConvexHull(points).vertices]
+
+    # calculate edge angles
+    edges = np.zeros((len(hull_points)-1, 2))
+    edges = hull_points[1:] - hull_points[:-1]
+
+    angles = np.zeros((len(edges)))
+    angles = np.arctan2(edges[:, 1], edges[:, 0])
+
+    angles = np.abs(np.mod(angles, pi2))
+    angles = np.unique(angles)
+
+    # find rotation matrices
+    # XXX both work
+    rotations = np.vstack([
+        np.cos(angles),
+        np.cos(angles-pi2),
+        np.cos(angles+pi2),
+        np.cos(angles)]).T
+#     rotations = np.vstack([
+#         np.cos(angles),
+#         -np.sin(angles),
+#         np.sin(angles),
+#         np.cos(angles)]).T
+    rotations = rotations.reshape((-1, 2, 2))
+
+    # apply rotations to the hull
+    rot_points = np.dot(rotations, hull_points.T)
+
+    # find the bounding points
+    min_x = np.nanmin(rot_points[:, 0], axis=1)
+    max_x = np.nanmax(rot_points[:, 0], axis=1)
+    min_y = np.nanmin(rot_points[:, 1], axis=1)
+    max_y = np.nanmax(rot_points[:, 1], axis=1)
+
+    # find the box with the best area
+    areas = (max_x - min_x) * (max_y - min_y)
+    best_idx = np.argmin(areas)
+
+    # return the best box
+    x1 = max_x[best_idx]
+    x2 = min_x[best_idx]
+    y1 = max_y[best_idx]
+    y2 = min_y[best_idx]
+    r = rotations[best_idx]
+
+    rval = np.zeros((4, 2))
+    rval[0] = np.round(np.dot([x1, y2], r))
+    rval[1] = np.round(np.dot([x2, y2], r))
+    rval[2] = np.round(np.dot([x2, y1], r))
+    rval[3] = np.round(np.dot([x1, y1], r))
+    
+    for i in range(4):
+        for j in range(2):
+            rval[i][j] = int(rval[i][j])
+
+    return rval
 
 def single_gpu_test(model,
                     data_loader,
@@ -161,6 +234,7 @@ def single_gpu_test(model,
 
 
                         if not (s[sub_max_idx] > s[(sub_max_idx+1)%4] and s[sub_max_idx]> s[(sub_max_idx-1)%4]):
+            
                             if (x[x_max_idx]- x[x_min_idx]) > (y[y_max_idx]- y[y_min_idx]):
                                 avg_max_length = (x[x_max_idx]- x[x_min_idx])
 
@@ -177,10 +251,10 @@ def single_gpu_test(model,
                                   ])
                                 avg_max_length = (y[y_max_idx]- y[y_min_idx])
                             # 회전하면 되는데 귀찮다
-    #                         image = mask_array*255.0  # class, proposed, width, height
-    #                         im = Image.fromarray(image)
-    #                         im = im.convert("L")
-    #                         im.save(f"./images_for_check/special{i}_{k}.png")  # why only 100??
+                            image = mask_array*255.0  # class, proposed, width, height
+                            im = Image.fromarray(image)
+                            im = im.convert("L")
+                            im.save(f"./images_for_check/special{i}_{k}.png")  # why only 100??
 
 
                         #class check!
@@ -215,82 +289,99 @@ def single_gpu_test(model,
                         
                         proposed_num = class_mask.shape[0]
                         
-                        print("rop", proposed_num)
+#                         print("rop", proposed_num)
                         for l in range(proposed_num):
                             mask_array = class_mask[l,:,:]
-                            polygons = Mask(mask_array).polygons()
-                            coords = polygons.points
+#                             polygons = Mask(mask_array).polygons()
+#                             coords = polygons.points
                             
-                            # one proposal should have one blob
+#                             # one proposal should have one blob
                             
-                            if len(coords) ==1:
-                                coords = coords[0]
-                            else:
-                                main_coord_idx = 0
-                                len_main_coord = len(coords[main_coord_idx])
-        #                         print("main", len_main_coord)
-                                for m in range(1,len(coords)):
-        #                             print(len(coords[l]))
-                                    if len(coords[m]) > len_main_coord:
-                                        main_coord_idx = m
-                                        len_main_coord = len(coords[m])
-                                coords = coords[main_coord_idx]
+#                             if len(coords) ==1:
+#                                 coords = coords[0]
+#                             else:
+#                                 main_coord_idx = 0
+#                                 len_main_coord = len(coords[main_coord_idx])
+#         #                         print("main", len_main_coord)
+#                                 for m in range(1,len(coords)):
+#         #                             print(len(coords[l]))
+#                                     if len(coords[m]) > len_main_coord:
+#                                         main_coord_idx = m
+#                                         len_main_coord = len(coords[m])
+#                                 coords = coords[main_coord_idx]
                             
-                            ##  get only 4 points
-                            x = []
-                            y = []
-                            for coord in coords:
-                                x.append(coord[0])
-                                y.append(coord[1])
+                            coords = np.argwhere(mask_array.T == True)
+                            coords= minimum_bounding_rectangle(coords)
 
-                            x = np.array(x)
-                            y = np.array(y)
-                            x_max_idx = np.argmax(x)
-                            x_min_idx = np.argmin(x)
-                            y_max_idx = np.argmax(y)
-                            y_min_idx = np.argmin(y)
+#                             ##  get only 4 points
+#                             x = []
+#                             y = []
+#                             for coord in coords:
+#                                 x.append(coord[0])
+#                                 y.append(coord[1])
 
-                            coords = np.array([[x[x_min_idx], y[x_min_idx]],
-                                      [x[y_min_idx], y[y_min_idx]],
-                                      [x[x_max_idx], y[x_max_idx]],
-                                      [x[y_max_idx], y[y_max_idx]]
-                                      ])
-                            
-                            #calculate sides
-                            s = [0]*len(coords)
-                            for n in range(len(coords)):
-                                s[n] = norm(coords[n+1] - coords[n]) if n+1 != len(coords) else norm(coords[0] - coords[n]) 
+#                             x = np.array(x)
+#                             y = np.array(y)
+#                             x_max_idx = np.argmax(x)
+#                             x_min_idx = np.argmin(x)
+#                             y_max_idx = np.argmax(y)
+#                             y_min_idx = np.argmin(y)
 
-                            #averaging max_sides
-                            max_idx = np.argmax(s)
-                            max_length = s[max_idx]
-                            sub_max_idx = (max_idx + 2)%len(coords)
-                            sub_max_length = s[sub_max_idx]
-                            avg_max_length = (max_length + sub_max_length)/2
+#                             coords = np.array([[x[x_min_idx], y[x_min_idx]],
+#                                       [x[y_min_idx], y[y_min_idx]],
+#                                       [x[x_max_idx], y[x_max_idx]],
+#                                       [x[y_max_idx], y[y_max_idx]]
+#                                       ])
                             
-                            if max_idx == 1 or max_idx == 3:
-                                coords = list(coords[-1:]) + list(coords[:-1])
-                                coords = np.array(coords)
+#                             #calculate sides
+#                             s = [0]*len(coords)
+#                             for n in range(len(coords)):
+#                                 s[n] = norm(coords[n+1] - coords[n]) if n+1 != len(coords) else norm(coords[0] - coords[n]) 
+
+#                             #averaging max_sides
+#                             max_idx = np.argmax(s)
+#                             max_length = s[max_idx]
+#                             sub_max_idx = (max_idx + 2)%len(coords)
+#                             sub_max_length = s[sub_max_idx]
+#                             avg_max_length = (max_length + sub_max_length)/2
+                            
+#                             if max_idx == 1 or max_idx == 3:
+#                                 coords = list(coords[-1:]) + list(coords[:-1])
+#                                 coords = np.array(coords)
                                 
-                            if not (s[sub_max_idx] > s[(sub_max_idx+1)%4] and s[sub_max_idx]> s[(sub_max_idx-1)%4]):
-                                if (x[x_max_idx]- x[x_min_idx]) > (y[y_max_idx]- y[y_min_idx]):
-                                    avg_max_length = (x[x_max_idx]- x[x_min_idx])
+#                             if not (s[sub_max_idx] > s[(sub_max_idx+1)%4] and s[sub_max_idx]> s[(sub_max_idx-1)%4]):
+#                                 if (x[x_max_idx]- x[x_min_idx]) > (y[y_max_idx]- y[y_min_idx]):
+#                                     avg_max_length = (x[x_max_idx]- x[x_min_idx])
 
-                                    coords = np.array([[x[x_min_idx], y[y_min_idx]],
-                                      [x[x_max_idx], y[y_min_idx]],
-                                      [x[x_max_idx], y[y_max_idx]],
-                                      [x[x_min_idx], y[y_max_idx]]
-                                      ])
-                                else:
-                                    coords = np.array([[x[x_max_idx], y[y_min_idx]],
-                                      [x[x_max_idx], y[y_max_idx]],
-                                      [x[x_min_idx], y[y_max_idx]],
-                                      [x[x_min_idx], y[y_min_idx]]
-                                      ])
-                                    avg_max_length = (y[y_max_idx]- y[y_min_idx])
+#                                     coords = np.array([[x[x_min_idx], y[y_min_idx]],
+#                                       [x[x_max_idx], y[y_min_idx]],
+#                                       [x[x_max_idx], y[y_max_idx]],
+#                                       [x[x_min_idx], y[y_max_idx]]
+#                                       ])
+#                                 else:
+#                                     coords = np.array([[x[x_max_idx], y[y_min_idx]],
+#                                       [x[x_max_idx], y[y_max_idx]],
+#                                       [x[x_min_idx], y[y_max_idx]],
+#                                       [x[x_min_idx], y[y_min_idx]]
+#                                       ])
+#                                     avg_max_length = (y[y_max_idx]- y[y_min_idx])
+#                                 image = mask_array*255.0  # class, proposed, width, height
+#                                 im = Image.fromarray(image)
+#                                 im = im.convert("L")
+#                                 im.save(f"./images_for_check/special{i}_{k}.png")  # why only 100??
+
                             class_pred = k+1
                             
+                        
+                            
                             poly_results_per_image.append((class_pred, class_bbox[l][-1], coords ))
+                            
+                            imcheck = Image.fromarray(mask_array).convert("RGB")
+                            img1 = ImageDraw.Draw(imcheck) 
+#                             coords_tuple = [(round(coord[0]), round(coord[1]))for coord in coords]
+#                             img1.polygon(coords_tuple, fill=(128, 0, 0, 50), outline ="blue")  
+                            
+#                             imcheck.save(f"./images_for_check2/special{i}_{k}.png")  # why only 100??
                         
 
                     

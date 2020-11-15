@@ -207,14 +207,14 @@ def main():
                         "File": filenames[i],
                         "Class": poly[0],
                         "Confidence": poly[1],
-                        "X1": poly[2][0][0],
-                        "Y1": poly[2][0][1],
-                        "X2": poly[2][1][0],
-                        "Y2": poly[2][1][1],
-                        "X3": poly[2][2][0],
-                        "Y3": poly[2][2][1],
-                        "X4": poly[2][3][0],
-                        "Y4": poly[2][3][1]
+                        "X1": int(poly[2][0][0]),
+                        "Y1": int(poly[2][0][1]),
+                        "X2": int(poly[2][1][0]),
+                        "Y2": int(poly[2][1][1]),
+                        "X3": int(poly[2][2][0]),
+                        "Y3": int(poly[2][2][1]),
+                        "X4": int(poly[2][3][0]),
+                        "Y4": int(poly[2][3][1])
                         }, ignore_index=True)
 
             df.to_csv('./for_submit/prediction.csv', index=False) 
